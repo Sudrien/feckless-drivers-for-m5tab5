@@ -9,6 +9,9 @@ and they came along unchanged.
 
 | Header | What it is |
 |---|---|
+| `tab5io.h` | The internal I2C bus and the two PI4IOE5V6416 expanders: reset, directions, SPK_EN, LCD_RST, TP_RST, CHG_EN. First thing at boot |
+| `audio_out.h` | I2S, the ES8388 (playback) and the ES7210 (the two array microphones, and a headset's on the jack), speaker or headphones or USB audio, volume, and capture |
+| `polyrsp.h` | A polyphase resampler, for USB audio devices that will not take the stream's rate |
 | `usbhost.h` | The USB-A port: USB5V_EN on the IO expander, the host stack, its task, and the class drivers registered on it |
 | `uac.h` | USB audio output (and a headset's microphone) through usb_host_uac |
 | `hid.h` | A USB HID remote: consumer-control keys from a headset or keyboard |
@@ -24,7 +27,7 @@ and they came along unchanged.
 dependencies:
   feckless_drivers:
     git: https://github.com/Sudrien/feckless-drivers-for-tab5.git
-    version: "v0.1.0"
+    version: "v0.2.0"
 ```
 
 and `feckless_drivers` in `main`'s `REQUIRES`.
@@ -34,7 +37,9 @@ mass storage, Ethernet, audio, HID -- registers a class with it before
 it starts.
 
 ```c
-usbhost_init(exp2);                          /* the PI4IOE at 0x44 */
+tab5io_init();                               /* bus, expanders, LCD_RST */
+audio_out_init(tab5io_bus(), tab5io_exp1(), 48000);
+usbhost_init(tab5io_exp2());                 /* the PI4IOE at 0x44 */
 usbhost_set_config_select(ethcfg_select);    /* optional; see below */
 storage_init(&storage_usb);                  /* registers "msc" */
 uac_init();
@@ -68,9 +73,16 @@ CONFIG_USB_HOST_DWC_DMA_CAP_MEMORY_IN_PSRAM=y
 That file explains each of them; copy from it rather than from here, and
 `rm sdkconfig` before the next build.
 
-**Own the IO expanders.** `usbhost.c` drives USB5V_EN on the expander
-at 0x44 itself, but resetting the expanders and setting their directions
-is still the application's (`io_expanders_init()` in the player).
+**Call `tab5io_init()` first.** Everything here, and the display in
+feckless-graphics-handler, needs the bus and the expanders' reset lines
+released. The lines on 0x44 other than CHG_EN are each driven by their
+own module (`usbhost.c`'s USB5V_EN, feckless-network's WLAN_PWR_EN); the
+power-off pulse is still the application's.
+
+**Capture borrows playback's clocks.** The microphones and the ES8388
+share one I2S port, and `audio_out_capture_begin()` re-clocks the
+playback channel rather than opening a second port. A program that only
+records still calls `audio_out_init()`; see `audio_out.h`.
 
 ## Tests
 

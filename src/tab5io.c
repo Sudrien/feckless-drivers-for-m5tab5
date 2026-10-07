@@ -1,3 +1,27 @@
+/*
+ * tab5io.c -- the Tab5's internal I2C bus and its two IO expanders. See
+ * tab5io.h.
+ *
+ * Carved out of defeatist-music-player-for-m5tab5's player.c, where it
+ * was never a module of its own; the import commit records which lines.
+ * The comments are as they were there.
+ *
+ * SPDX-License-Identifier: MIT
+ */
+
+#include "tab5io.h"
+
+#include <stdbool.h>
+#include <stddef.h>
+
+#include "driver/gpio.h"
+#include "esp_check.h"
+#include "esp_log.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+
+static const char *TAG = "tab5io";
+
 /* ---- I2C bus: same pins the display example uses ---- */
 #define BSP_I2C_NUM             (0)
 #define BSP_I2C_SDA             (GPIO_NUM_31)
@@ -5,18 +29,11 @@
 #define I2C_TIMEOUT_MS          (1000)
 
 /* ---- PI4IOE5V6416 expander 1: P1 = SPK_EN ---- */
-#define PI4IOE_ADDR_1           (0x43)
-#define PI4IOE_REG_IO_DIR       (0x03)
-#define PI4IOE_REG_OUT_SET      (0x05)
-#define PI4IOE_REG_OUT_HIGH_Z   (0x07)
+/* PI4IOE_ADDR_1 and the PI4IOE_REG_* registers: tab5io.h */
 #define PI4IOE1_IO_DIR          (0x7F)
 #define PI4IOE1_OUT_SET         (0x76)  /* P1 SPK_EN, P2 EXT5V, P4 LCD_RST, P5 TP_RST, P6 CAM_RST */
 
-#define PI4IOE_REG_CHIP_RESET   (0x01)
-#define PI4IOE_REG_PULL_EN      (0x0B)
-#define PI4IOE_REG_PULL_SEL     (0x0D)
-
-#define PI4IOE_ADDR_2           (0x44)
+/* PI4IOE_ADDR_2: tab5io.h */
 #define PI4IOE2_IO_DIR          (0xB9)
 #define CHG_EN_BIT              (1u << 7)   /* 6052: P7, the charger's enable */
 
@@ -137,3 +154,13 @@ static esp_err_t io_expanders_init(void)
     vTaskDelay(pdMS_TO_TICKS(100));     /* panel out of reset before first command */
     return ESP_OK;
 }
+
+esp_err_t tab5io_init(void)
+{
+    ESP_RETURN_ON_ERROR(i2c_bus_init(), TAG, "i2c bus");
+    return io_expanders_init();
+}
+
+i2c_master_bus_handle_t tab5io_bus(void)  { return s_i2c_bus; }
+i2c_master_dev_handle_t tab5io_exp1(void) { return s_exp1; }
+i2c_master_dev_handle_t tab5io_exp2(void) { return s_exp2; }

@@ -12,11 +12,13 @@
 # SPDX-License-Identifier: MIT
 
 idf_component_register(
-    SRCS "src/usbhost.c" "src/uac.c" "src/hid.c" "src/battery.c"
+    SRCS "src/tab5io.c"
+         "src/usbhost.c" "src/uac.c" "src/hid.c" "src/battery.c"
          "src/rtc8130.c" "src/touch.c"
+         "src/audio_out.c" "src/polyrsp.c"
     INCLUDE_DIRS "include"
     PRIV_INCLUDE_DIRS "private_include"
     REQUIRES esp_driver_i2c esp_driver_gpio esp_lcd_touch usb
-    PRIV_REQUIRES esp_timer usb_host_uac
+    PRIV_REQUIRES esp_timer esp_driver_i2s usb_host_uac
              esp_lcd_touch_gt911 esp_lcd_touch_st7123
 )

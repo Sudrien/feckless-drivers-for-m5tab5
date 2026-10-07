@@ -1,4 +1,4 @@
-version: "0.1.0"
+version: "0.2.0"
 description: >-
   M5Stack Tab5 board drivers: the USB-A host and its USB audio and HID
   class drivers, the battery monitor, the RX8130 clock and the

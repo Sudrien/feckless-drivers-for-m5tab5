@@ -34,7 +34,13 @@
 #include "polyrsp.h"
 
 #include "audio_out.h"
-#include "i18n.h"         /* 6016 */
+/* 6016: N_() marks the route names for translation. The player's
+ * i18n.h defines it; here it is the identity it is there, and the
+ * player's translation tables keep the three strings (tools/i18n.py
+ * extract adds and never removes). */
+#ifndef N_
+#define N_(s) (s)
+#endif
 #include "battery.h"
 #include "micpcm.h"           /* 5207 */
 #include "uac.h"
