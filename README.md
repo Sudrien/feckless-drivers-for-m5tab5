@@ -27,7 +27,7 @@ and they came along unchanged.
 dependencies:
   feckless_drivers:
     git: https://github.com/Sudrien/feckless-drivers-for-tab5.git
-    version: "v0.2.0"
+    version: "v0.3.0"
 ```
 
 and `feckless_drivers` in `main`'s `REQUIRES`.

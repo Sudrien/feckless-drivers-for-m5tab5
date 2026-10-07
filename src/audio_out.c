@@ -1120,6 +1120,24 @@ static void es7210_stop(void)
 /* 5211: the capture probe's state; see capture_probe(). */
 #define CAPTURE_PROBE_S         (5)
 static uint32_t s_probe_frames, s_probe_secs;
+/*
+ * Where in each four-word group the codec's slot 0 landed this capture,
+ * or -1 until it has been found. See micpcm_tdm_count(): the RX channel
+ * is a slave on running clocks and starts wherever the frame is, so the
+ * slots can arrive rotated by any of 0..3, differently each time a
+ * capture begins. Found from the one position that stays silent, after
+ * ALIGN_SKIP_FRAMES of start-up, over ALIGN_FRAMES; capture_read() hands
+ * back nothing until then. ALIGN_TRIES windows, then 0 and a warning.
+ */
+#define ALIGN_SKIP_FRAMES       (2400)  /* 50 ms: the ES7210's start-up noise */
+#define ALIGN_FRAMES            (4800)  /* 100 ms of looking */
+#define ALIGN_MAX_NZ            (16)    /* a silent slot, give or take a click */
+#define ALIGN_TRIES             (5)
+static int      s_align_shift = -1;
+static uint32_t s_align_frames;
+static uint32_t s_align_nz[HEADSET_TDM_SLOTS];
+static int      s_align_tries;
+
 static int32_t  s_probe_peak[HEADSET_TDM_SLOTS];
 static uint32_t s_probe_nz[HEADSET_TDM_SLOTS];
 
@@ -1258,6 +1276,10 @@ esp_err_t audio_out_capture_begin(audio_capture_src_t src)
         return err;
     }
     s_cap_src = src;
+    s_align_shift = -1;                                 /* see s_align_shift */
+    s_align_frames = 0;
+    s_align_tries = 0;
+    memset(s_align_nz, 0, sizeof(s_align_nz));
     s_probe_frames = 0; s_probe_secs = 0;               /* 5211 */
     memset(s_probe_peak, 0, sizeof(s_probe_peak));
     memset(s_probe_nz, 0, sizeof(s_probe_nz));
@@ -1325,17 +1347,47 @@ size_t audio_out_capture_read(int32_t *frames, size_t max_frames, uint32_t timeo
     if (err != ESP_OK && err != ESP_ERR_TIMEOUT) return 0;
     const size_t n = got / (2 * sizeof(int32_t));
     capture_probe(frames, n);                           /* 5211 */
+
+    /* Find the frame's start before handing anything over. */
+    if (s_align_shift < 0) {
+        const uint32_t before = s_align_frames;
+        s_align_frames += (uint32_t)n;
+        if (s_align_frames <= ALIGN_SKIP_FRAMES) return 0;
+        const size_t skip = before < ALIGN_SKIP_FRAMES ? ALIGN_SKIP_FRAMES - before : 0;
+        micpcm_tdm_count(frames + skip * 2, n - skip, HEADSET_TDM_SLOTS, s_align_nz);
+        if (s_align_frames < ALIGN_SKIP_FRAMES + ALIGN_FRAMES) return 0;
+        const int at = micpcm_tdm_silent(s_align_nz, HEADSET_TDM_SLOTS, ALIGN_MAX_NZ);
+        if (at >= 0) {
+            s_align_shift = at;
+            ESP_LOGI(TAG, "capture: TDM frame %d slot%s in; slots realigned",
+                     at, at == 1 ? "" : "s");
+        } else if (++s_align_tries >= ALIGN_TRIES) {
+            s_align_shift = 0;
+            ESP_LOGW(TAG, "capture: no silent TDM slot (%" PRIu32 "/%" PRIu32 "/%" PRIu32
+                     "/%" PRIu32 " nonzero); assuming aligned", s_align_nz[0],
+                     s_align_nz[1], s_align_nz[2], s_align_nz[3]);
+        } else {
+            s_align_frames = ALIGN_SKIP_FRAMES;     /* look again, no skip */
+            memset(s_align_nz, 0, sizeof(s_align_nz));
+        }
+        return 0;
+    }
+    const unsigned sh = (unsigned)s_align_shift;
+
     if (s_cap_src == AUDIO_CAPTURE_HEADSET) {
         /*
          * 5206: n raw frames of four int16 slots, 8 bytes each -- the same
          * byte count as n stereo int32 frames. One slot kept, widened to
          * int32, in place. 5207: micpcm.h, host-tested.
          */
-        return micpcm_tdm_slot(frames, n, HEADSET_TDM_SLOTS, HEADSET_TDM_SLOT);
+        return micpcm_tdm_slot(frames, n, HEADSET_TDM_SLOTS,
+                               (HEADSET_TDM_SLOT + sh) % HEADSET_TDM_SLOTS);
     }
     /* 5212: the array's two slots, as stereo, carried to 24-bit scale --
      * the width recorder.c, beam.c (FULL_SCALE 2^23) and the file expect. */
-    return micpcm_tdm_pair(frames, n, HEADSET_TDM_SLOTS, BUILTIN_TDM_L, BUILTIN_TDM_R, 8);
+    return micpcm_tdm_pair(frames, n, HEADSET_TDM_SLOTS,
+                           (BUILTIN_TDM_L + sh) % HEADSET_TDM_SLOTS,
+                           (BUILTIN_TDM_R + sh) % HEADSET_TDM_SLOTS, 8);
 }
 
 void audio_out_capture_end(void)

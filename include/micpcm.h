@@ -110,6 +110,50 @@ static inline size_t micpcm_s16_take(uint8_t *raw, size_t carry, size_t got, uns
  * produces can overflow it. Output i is written after input 2i and 2i+1
  * are read, and 2i >= i, so forward is safe.
  */
+/*
+ * TDM slot alignment, found from the data.
+ *
+ * The capture channel is an I2S SLAVE on clocks the playback channel
+ * already drives, so when it is enabled it starts taking 16-bit words
+ * wherever the frame happens to be -- not necessarily at slot 0. Every
+ * slot then arrives `shift` positions later in each four-word group
+ * than the codec sent it, for the whole capture. A board showed every
+ * shift from 0 to 3 across restarts of the same capture.
+ *
+ * The ES7210 as configured here never drives its slot 0: in every probe
+ * line, once the first second's start-up noise is past, slot 0 reads
+ * 0 nonzero samples in 48000. So the one raw position that stays silent
+ * is where slot 0 landed, and that position IS the shift.
+ *
+ * micpcm_tdm_count() adds up, per raw position, how many samples in a
+ * block were nonzero. micpcm_tdm_silent() names the position with no
+ * more than `max_nz` of them, if exactly one has; -1 if none or several
+ * did, which is not enough to decide on.
+ */
+static inline void micpcm_tdm_count(const int32_t *frames, size_t n, unsigned slots,
+                                    uint32_t *nz)
+{
+    const uint8_t *raw = (const uint8_t *)frames;
+    for (size_t i = 0; i < n; i++) {
+        for (unsigned k = 0; k < slots; k++) {
+            int16_t s;
+            memcpy(&s, raw + (i * slots + k) * sizeof(int16_t), sizeof(s));
+            if (s) nz[k]++;
+        }
+    }
+}
+
+static inline int micpcm_tdm_silent(const uint32_t *nz, unsigned slots, uint32_t max_nz)
+{
+    int found = -1;
+    for (unsigned k = 0; k < slots; k++) {
+        if (nz[k] > max_nz) continue;
+        if (found >= 0) return -1;      /* two quiet positions: undecided */
+        found = (int)k;
+    }
+    return found;
+}
+
 static inline void micpcm_mono(int32_t *frames, size_t n)
 {
     for (size_t i = 0; i < n; i++) {

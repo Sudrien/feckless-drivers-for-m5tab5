@@ -193,9 +193,45 @@ static void test_mono(void)
     CHECK(f[6] == 2147483647, "no overflow at int32 max: %d", (int)f[6]);
 }
 
+/* The silent slot, found wherever the frame was cut: four slots, slot 0
+ * silent, the stream started `shift` words into a frame. */
+static void test_align(void)
+{
+    printf("  tdm alignment from the silent slot\n");
+    enum { N = 480, SLOTS = 4 };
+    for (unsigned shift = 0; shift < SLOTS; shift++) {
+        /* What the codec sends, frame after frame: slot 0 silent, 1-3 not. */
+        static int16_t sent[(N + 1) * SLOTS];
+        for (unsigned i = 0; i < (N + 1) * SLOTS; i++) {
+            const unsigned slot = i % SLOTS;
+            sent[i] = slot == 0 ? 0 : (int16_t)(100 * (int)slot + (int)(i % 7) + 1);
+        }
+        /* What a channel enabled mid-frame reads: the same words, `shift`
+         * of them late -- so position p holds slot (p - shift) mod 4... or
+         * rather the word stream starts at word (SLOTS - shift) % SLOTS. */
+        static int32_t got[N * SLOTS / 2];
+        memcpy(got, sent + (SLOTS - shift) % SLOTS, N * SLOTS * sizeof(int16_t));
+        uint32_t nz[SLOTS] = { 0 };
+        micpcm_tdm_count(got, N, SLOTS, nz);
+        const int where = micpcm_tdm_silent(nz, SLOTS, 0);
+        CHECK(where == (int)shift, "shift %u: silent slot found at %d", shift, where);
+
+        /* Taking slot 3 relative to that position gives slot 3's samples. */
+        const size_t n = micpcm_tdm_slot(got, N, SLOTS, (3 + (unsigned)where) % SLOTS);
+        size_t bad = 0;
+        for (size_t i = 0; i < n; i++) bad += (got[i] < 300 || got[i] > 307);
+        CHECK(n == N && bad == 0, "shift %u: slot 3 not recovered (%zu wrong)", shift, bad);
+    }
+    uint32_t none[4] = { 9, 9, 9, 9 }, two[4] = { 0, 9, 0, 9 }, noise[4] = { 3, 900, 800, 700 };
+    CHECK(micpcm_tdm_silent(none, 4, 0) == -1, "nothing silent must be undecided");
+    CHECK(micpcm_tdm_silent(two, 4, 0) == -1, "two silent must be undecided");
+    CHECK(micpcm_tdm_silent(noise, 4, 4) == 0, "a few start-up samples within max_nz");
+}
+
 int main(void)
 {
     printf("micpcmtest\n");
+    test_align();
     test_tdm();
     test_carry();
     test_pair();
