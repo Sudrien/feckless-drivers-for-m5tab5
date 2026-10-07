@@ -1,0 +1,21 @@
+version: "0.1.0"
+description: >-
+  M5Stack Tab5 board drivers: the USB-A host and its USB audio and HID
+  class drivers, the battery monitor, the RX8130 clock and the
+  touch controller (GT911 or ST7123, probed).
+url: https://github.com/Sudrien/feckless-drivers-for-tab5
+license: MIT
+
+dependencies:
+  idf:
+    version: ">=5.4.2"
+
+  # Moved here from defeatist-music-player-for-m5tab5's main/idf_component.yml
+  # with touch.c; the comment is as it was there.
+  #
+  # Both, because the controller is probed rather than assumed: rev 1 Tab5
+  # is ILI9881C + GT911, rev 2 is ST7121/ST7123 + ST7123. Dropping the one
+  # your board does not have saves a little flash and guarantees the other
+  # revision fails at runtime instead of at link time.
+  espressif/esp_lcd_touch_st7123: "*"
+  espressif/esp_lcd_touch_gt911: "*"

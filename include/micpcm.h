@@ -7,7 +7,7 @@
  * frame dropped at a read boundary so a stereo file swaps sides from
  * there on, a sum that rounds one way for positive samples and the other
  * for negative. Header-only and inline for pcmfold.h's reason, and
- * host-tested in texttest/micpcmtest.c, which audio_out.c and uac.c,
+ * host-tested in test/micpcmtest.c, which audio_out.c and uac.c,
  * full of ESP-IDF includes, could never be.
  *
  * Every output sample is an int32 holding a sign-extended value of the

@@ -13,7 +13,6 @@
 
 #include "usb/usb_host.h"
 
-#include "ethcfg.h"
 #include "battery.h"
 #include "usbhost.h"
 
@@ -79,6 +78,16 @@ static TaskHandle_t  s_task;
  * now separate lifetimes: the stack goes up once and stays, and the
  * power can be cycled underneath it any number of times.
  */
+/* The application's say in which configuration a device gets. See
+ * usbhost_set_config_select(). Set before usbhost_start(), read on the
+ * bus task. */
+static usbhost_config_fn s_config_select;
+
+void usbhost_set_config_select(usbhost_config_fn fn)
+{
+    s_config_select = fn;
+}
+
 static volatile bool s_vbus_want = true;
 static volatile bool s_vbus_on;
 
@@ -148,7 +157,8 @@ static void usb_lib_task(void *arg)
 /*
  * Runs for every device, before its configuration is set. Returning
  * false would refuse the device, so this always returns true and only
- * ever changes which configuration is asked for -- see ethcfg.h.
+ * ever changes which configuration is asked for -- see
+ * usbhost_set_config_select().
  */
 static bool enum_filter(const usb_device_desc_t *dev, uint8_t *config)
 {
@@ -158,10 +168,11 @@ static bool enum_filter(const usb_device_desc_t *dev, uint8_t *config)
      * been followed by the Wi-Fi link dying; this says whether the pack
      * saw it. */
     battery_trace_arm("usb device");
-    const uint8_t want = ethcfg_select(dev->idVendor, dev->idProduct,
-                                       dev->bNumConfigurations);
+    const uint8_t want = s_config_select
+        ? s_config_select(dev->idVendor, dev->idProduct, dev->bNumConfigurations)
+        : 0;
     if (want) {
-        ESP_LOGI(TAG, "%04x:%04x: asking for configuration %u (CDC-ECM)",
+        ESP_LOGI(TAG, "%04x:%04x: asking for configuration %u",
                  dev->idVendor, dev->idProduct, want);
         *config = want;
     }

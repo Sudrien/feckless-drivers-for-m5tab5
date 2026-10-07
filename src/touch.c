@@ -82,7 +82,7 @@ static int s_w, s_h;
 static int s_rot;
 
 /* The inverse of gfx.c's forward map. Both are duplicated in
- * texttest/rotatetest.c, which checks they round-trip at every angle;
+ * the player's texttest/rotatetest.c, which checks they round-trip at every angle;
  * change one, change all three. */
 void touch_set_rotation(int quarter_turns)
 {

@@ -21,6 +21,7 @@
 #pragma once
 
 #include <stdbool.h>
+#include <stdint.h>
 
 #include "driver/i2c_master.h"
 #include "esp_err.h"
@@ -46,6 +47,25 @@ typedef esp_err_t (*usbhost_class_fn)(void);
  * that device again until it is unplugged.
  */
 esp_err_t usbhost_register_class(const char *name, usbhost_class_fn fn);
+
+/*
+ * Which configuration to ask a device for, chosen before it is
+ * configured. Return 0 to leave the device's own choice alone, or a
+ * configuration number. Runs on the bus task for every device.
+ *
+ * The one user so far is Ethernet: a Realtek RTL8152/8153 comes up in a
+ * vendor configuration and speaks CDC-ECM in its second, which is what
+ * feckless-network-handler's ethcfg_select() answers -- pass that here.
+ * It lived in this file as a direct call until the two were separate
+ * components.
+ *
+ * Before usbhost_start(). Needs CONFIG_USB_HOST_ENABLE_ENUM_FILTER_CALLBACK;
+ * without it the function is never called and every device gets its
+ * default configuration. NULL (the default) is the same.
+ */
+typedef uint8_t (*usbhost_config_fn)(uint16_t vid, uint16_t pid,
+                                     uint8_t num_configs);
+void usbhost_set_config_select(usbhost_config_fn fn);
 
 /*
  * Record the expander and start the bus task. Powers nothing.
