@@ -3,7 +3,7 @@ description: >-
   M5Stack Tab5 board drivers: the USB-A host and its USB audio and HID
   class drivers, the battery monitor, the RX8130 clock and the
   touch controller (GT911 or ST7123, probed).
-url: https://github.com/Sudrien/feckless-drivers-for-tab5
+url: https://github.com/Sudrien/feckless-drivers-for-m5tab5
 license: MIT
 
 dependencies:

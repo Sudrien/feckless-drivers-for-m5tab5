@@ -26,7 +26,7 @@ and they came along unchanged.
 # main/idf_component.yml
 dependencies:
   feckless_drivers:
-    git: https://github.com/Sudrien/feckless-drivers-for-tab5.git
+    git: https://github.com/Sudrien/feckless-drivers-for-m5tab5.git
     version: "v0.3.0"
 ```
 

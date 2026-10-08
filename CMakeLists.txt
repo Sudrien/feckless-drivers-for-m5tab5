@@ -1,4 +1,4 @@
-# feckless-drivers-for-tab5
+# feckless-drivers-for-m5tab5
 #
 # usb_host_uac is REQUIRED BY NAME and not listed in idf_component.yml:
 # the player vendors it with a descriptor-parser fix the registry does not
