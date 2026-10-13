@@ -84,22 +84,53 @@ static inline size_t micpcm_tdm_pair(int32_t *frames, size_t n, unsigned slots,
  * ((carry + got) / (ch * 2)) * ch int32. ch 0 returns 0 and keeps
  * nothing.
  */
-static inline size_t micpcm_s16_take(uint8_t *raw, size_t carry, size_t got, unsigned ch,
-                                     int32_t *out, size_t *carry_out)
+/*
+ * The same for any USB audio subframe: `sub` bytes a sample, little-
+ * endian, two's complement (UAC 1.0 Type I PCM).
+ *
+ *   2   int16, kept as it is: a 16-bit value.
+ *   3   24 bits packed, sign-extended from bit 23: a 24-bit value.
+ *   4   a 32-bit word whose top 24 bits are the sample -- the spec has a
+ *       sample left-justified in its subframe, so a 24-bit device in
+ *       4-byte subframes and a 32-bit one both come out at 24-bit scale,
+ *       by an arithmetic shift right of 8.
+ *
+ * So every output is a sign-extended value of 16 or 24 bits, and which
+ * is the width the caller opened. Any other `sub`, or ch 0, returns 0
+ * and keeps nothing. Partial frames carry as micpcm_s16_take() says.
+ */
+static inline size_t micpcm_take(uint8_t *raw, size_t carry, size_t got, unsigned ch,
+                                 unsigned sub, int32_t *out, size_t *carry_out)
 {
-    if (!ch) { *carry_out = 0; return 0; }
-    const size_t fb = (size_t)ch * sizeof(int16_t);
+    if (!ch || (sub != 2 && sub != 3 && sub != 4)) { *carry_out = 0; return 0; }
+    const size_t fb = (size_t)ch * sub;
     const size_t have = carry + got;
     const size_t n = have / fb;
     for (size_t i = 0; i < n * ch; i++) {
-        int16_t s;
-        memcpy(&s, raw + i * sizeof(int16_t), sizeof(s));
-        out[i] = s;
+        const uint8_t *p = raw + i * sub;
+        if (sub == 2) {
+            int16_t s;
+            memcpy(&s, p, sizeof(s));
+            out[i] = s;
+        } else if (sub == 3) {
+            const uint32_t u = (uint32_t)p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16);
+            out[i] = (int32_t)(u ^ 0x800000u) - 0x800000;      /* sign from bit 23 */
+        } else {
+            int32_t s;
+            memcpy(&s, p, sizeof(s));
+            out[i] = s >> 8;            /* arithmetic: GCC and Clang guarantee it */
+        }
     }
     const size_t rest = have - n * fb;
     if (rest) memmove(raw, raw + n * fb, rest);
     *carry_out = rest;
     return n;
+}
+
+static inline size_t micpcm_s16_take(uint8_t *raw, size_t carry, size_t got, unsigned ch,
+                                     int32_t *out, size_t *carry_out)
+{
+    return micpcm_take(raw, carry, got, ch, 2, out, carry_out);
 }
 
 /*

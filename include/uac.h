@@ -170,8 +170,19 @@ bool uac_mic_announced(void);
 esp_err_t uac_mic_open(uint32_t *rate, uint8_t *channels);
 
 /*
- * Up to max_frames interleaved frames, each sample a 16-bit value sign-
- * extended in int32, in the format uac_mic_open() reported. Waits up to
+ * uac_mic_open(), allowing wider samples: up to `max_bits`, 16 or 24.
+ * At 24 a 24-bit alternate -- 3- or 4-byte subframes, or 32-bit in 4,
+ * taken at its top 24 -- is preferred over a 16-bit one at the same
+ * rate. *bits (may be NULL) says which was started, and uac_mic_read()
+ * then hands back values of that width. uac_mic_open() is this at 16,
+ * so a caller that never asks for more keeps getting 16-bit values.
+ */
+esp_err_t uac_mic_open_bits(uint32_t *rate, uint8_t *channels, uint8_t max_bits, uint8_t *bits);
+
+/*
+ * Up to max_frames interleaved frames, each sample a value of the width
+ * the open reported -- 16 bits for uac_mic_open(), 16 or 24 for
+ * uac_mic_open_bits() -- sign-extended in int32. Waits up to
  * timeout_ms; 0 on a timeout. Whole frames only: a partial frame the
  * driver hands back is carried to the next call.
  */

@@ -204,7 +204,7 @@ static uint8_t s_tx_addr;
 #define UAC_MIC_BUFFER_SIZE     (32 * 1024)
 #define UAC_MIC_BUFFER_THRESHOLD (4 * 1024)
 #define UAC_MIC_READ_FRAMES     (480)       /* 10 ms at 48 kHz, per call at most */
-#define UAC_MIC_FRAME_MAX       (2 * 2)     /* 2 ch x 16-bit */
+#define UAC_MIC_FRAME_MAX       (2 * 4)     /* 2 ch x a 4-byte subframe, the widest taken */
 
 static portMUX_TYPE      s_mic_mux = portMUX_INITIALIZER_UNLOCKED;
 static bool              s_mic_known;
@@ -215,6 +215,7 @@ static uac_host_device_handle_t s_mic;
 static volatile bool     s_mic_open;
 static volatile bool     s_mic_gone;
 static uint8_t           s_mic_ch;
+static uint8_t           s_mic_sub;         /* bytes a sample: 2, 3 or 4 (micpcm_take()) */
 static uint8_t          *s_mic_raw;         /* UAC_MIC_READ_FRAMES frames + a carry */
 static size_t            s_mic_carry;       /* bytes of a partial frame at s_mic_raw */
 static uint32_t          s_mic_xfer_errors;
@@ -790,13 +791,29 @@ static void mic_event_cb(uac_host_device_handle_t dev,
 }
 
 /*
+ * Whether this alternate can be taken at no more than `max_bits`, and at
+ * what width: 16 (a 2-byte subframe), or 24 (24 bits in a 3- or 4-byte
+ * subframe, or 32 in 4, read at its top 24 -- micpcm_take()). 0 when it
+ * cannot. The width the caller gets is the one *bits says.
+ */
+static unsigned mic_alt_bits(const uac_host_dev_alt_param_t *p, unsigned max_bits)
+{
+    if (p->format != 1 /* PCM */) return 0;
+    if (p->bit_resolution == 16 && p->subframe_size == 2) return 16;
+    if (max_bits < 24) return 0;
+    if (p->bit_resolution == 24 && (p->subframe_size == 3 || p->subframe_size == 4)) return 24;
+    if (p->bit_resolution == 32 && p->subframe_size == 4) return 24;
+    return 0;
+}
+
+/*
  * The rate this alternate would be started at, and how much it is
  * wanted: 48 kHz (3), then 44.1 (2), then its highest (1). 0 when it is
- * not 16-bit PCM in one or two channels.
+ * not PCM of a width mic_alt_bits() takes, in one or two channels.
  */
-static int mic_alt_score(const uac_host_dev_alt_param_t *p, uint32_t *rate)
+static int mic_alt_score(const uac_host_dev_alt_param_t *p, uint32_t *rate, unsigned max_bits)
 {
-    if (p->format != 1 /* PCM */ || p->bit_resolution != 16) return 0;
+    if (!mic_alt_bits(p, max_bits)) return 0;
     if (p->channels < 1 || p->channels > 2) return 0;
     if (alt_offers_rate(p, 48000)) { *rate = 48000; return 3; }
     if (alt_offers_rate(p, 44100)) { *rate = 44100; return 2; }
@@ -813,7 +830,7 @@ static int mic_alt_score(const uac_host_dev_alt_param_t *p, uint32_t *rate)
     return 1;
 }
 
-esp_err_t uac_mic_open(uint32_t *rate, uint8_t *channels)
+esp_err_t uac_mic_open_bits(uint32_t *rate, uint8_t *channels, uint8_t max_bits, uint8_t *bits)
 {
     if (!s_mic_lock) return ESP_ERR_INVALID_STATE;
     xSemaphoreTake(s_mic_lock, portMAX_DELAY);
@@ -857,26 +874,33 @@ esp_err_t uac_mic_open(uint32_t *rate, uint8_t *channels)
     uac_host_dev_info_t info;
     int best = 0;
     uint32_t best_rate = 0;
-    uint8_t best_ch = 0, best_alt = 0;
+    uint8_t best_ch = 0, best_alt = 0, best_res = 0, best_sub = 0;
+    unsigned best_bits = 0;
     if (uac_host_get_device_info(dev, &info) == ESP_OK) {
         flatten(s_mic_product, sizeof(s_mic_product), info.iProduct);
         ESP_LOGI(TAG, "USB microphone: %04X:%04X %s", info.VID, info.PID, s_mic_product);
         for (uint8_t alt = 1; alt <= info.iface_alt_num; alt++) {
             uac_host_dev_alt_param_t p;
             if (uac_host_get_device_alt_param(dev, alt, &p) != ESP_OK) continue;
-            ESP_LOGI(TAG, "  mic alt %u: %u ch, %u-bit", alt, p.channels, p.bit_resolution);
+            ESP_LOGI(TAG, "  mic alt %u: %u ch, %u-bit in %u bytes", alt, p.channels,
+                     p.bit_resolution, p.subframe_size);
             uint32_t r = 0;
-            const int sc = mic_alt_score(&p, &r);
-            /* Rank, then channels, then rate. */
+            const int sc = mic_alt_score(&p, &r, max_bits);
+            const unsigned w = mic_alt_bits(&p, max_bits);
+            /* Rate's rank, then width, then channels, then rate: the
+             * widest the caller allows at the best rate. */
             if (sc > best || (sc == best && sc &&
-                              (p.channels > best_ch ||
-                               (p.channels == best_ch && r > best_rate)))) {
+                              (w > best_bits ||
+                               (w == best_bits && (p.channels > best_ch ||
+                                (p.channels == best_ch && r > best_rate)))))) {
                 best = sc; best_rate = r; best_ch = p.channels; best_alt = alt;
+                best_bits = w; best_res = p.bit_resolution; best_sub = p.subframe_size;
             }
         }
     }
     if (!best) {
-        ESP_LOGW(TAG, "USB microphone offers no 16-bit PCM in 1 or 2 channels");
+        ESP_LOGW(TAG, "USB microphone offers no PCM of up to %u bits in 1 or 2 channels",
+                 (unsigned)max_bits);
         uac_host_device_close(dev);
         s_mic_product[0] = '\0';
         ret = ESP_ERR_NOT_SUPPORTED;
@@ -885,7 +909,7 @@ esp_err_t uac_mic_open(uint32_t *rate, uint8_t *channels)
 
     const uac_host_stream_config_t scfg = {
         .channels = best_ch,
-        .bit_resolution = 16,
+        .bit_resolution = best_res,
         .sample_freq = best_rate,
         .flags = 0,
     };
@@ -900,18 +924,25 @@ esp_err_t uac_mic_open(uint32_t *rate, uint8_t *channels)
 
     s_mic = dev;
     s_mic_ch = best_ch;
+    s_mic_sub = best_sub;
     s_mic_carry = 0;
     s_mic_xfer_errors = 0;
     s_mic_gone = false;
     s_mic_open = true;
     *rate = best_rate;
     *channels = best_ch;
-    ESP_LOGI(TAG, "microphone streaming: alt %u, %u ch, 16-bit, %lu Hz",
-             best_alt, best_ch, (unsigned long)best_rate);
+    if (bits) *bits = (uint8_t)best_bits;
+    ESP_LOGI(TAG, "microphone streaming: alt %u, %u ch, %u-bit in %u bytes, %lu Hz",
+             best_alt, best_ch, best_res, best_sub, (unsigned long)best_rate);
     ret = ESP_OK;
 out:
     xSemaphoreGive(s_mic_lock);
     return ret;
+}
+
+esp_err_t uac_mic_open(uint32_t *rate, uint8_t *channels)
+{
+    return uac_mic_open_bits(rate, channels, 16, NULL);
 }
 
 size_t uac_mic_read(int32_t *frames, size_t max_frames, uint32_t timeout_ms)
@@ -920,7 +951,7 @@ size_t uac_mic_read(int32_t *frames, size_t max_frames, uint32_t timeout_ms)
     xSemaphoreTake(s_mic_lock, portMAX_DELAY);
     size_t n = 0;
     if (s_mic && !s_mic_gone) {
-        const size_t fb = (size_t)s_mic_ch * sizeof(int16_t);
+        const size_t fb = (size_t)s_mic_ch * s_mic_sub;
         if (max_frames > UAC_MIC_READ_FRAMES) max_frames = UAC_MIC_READ_FRAMES;
         const size_t want = max_frames * fb - s_mic_carry;
         uint32_t got = 0;
@@ -932,7 +963,7 @@ size_t uac_mic_read(int32_t *frames, size_t max_frames, uint32_t timeout_ms)
          * timeout -- is kept for the next call, or every sample after it
          * would shift a channel and a stereo file would swap sides from
          * there. micpcm.h, host-tested. */
-        n = micpcm_s16_take(s_mic_raw, s_mic_carry, got, s_mic_ch, frames, &s_mic_carry);
+        n = micpcm_take(s_mic_raw, s_mic_carry, got, s_mic_ch, s_mic_sub, frames, &s_mic_carry);
     }
     xSemaphoreGive(s_mic_lock);
     return n;
