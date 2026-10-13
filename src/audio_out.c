@@ -918,6 +918,38 @@ esp_err_t audio_out_write(const void *data, size_t len)
     return err;
 }
 
+/*
+ * Monitoring: what a headset capture hears, back out to its headphones.
+ *
+ * audio_out_write() drops everything while capturing, and that stands:
+ * the player's writes are not wanted during a recording. This is the one
+ * writer allowed through, and only for a headset capture with the route
+ * on the headphones -- never the speaker, which the jack's own
+ * microphone, or the array beside it, would hear and feed back.
+ *
+ * TX is re-clocked in place for a capture (5209): 48 kHz, 16-bit data in
+ * 32-bit slots. The data width is still 16 bits, so the DMA takes 16-bit
+ * samples as it always has and the slot padding is the peripheral's.
+ * 5106's note that 16-bit audio "would reach the DAC as noise" was
+ * written about the duplex pair 5209 replaced; if it still does, this is
+ * where it shows.
+ *
+ * Never blocks: a block the DMA has no room for is dropped, so a capture
+ * task calling this between reads cannot be held up by it.
+ */
+esp_err_t audio_out_monitor_write(const int16_t *stereo, size_t frames)
+{
+    if (!stereo || !frames) return ESP_OK;
+    if (!s_capturing || s_cap_src != AUDIO_CAPTURE_HEADSET || s_route != ROUTE_HEADPHONES)
+        return ESP_ERR_INVALID_STATE;
+    if (xSemaphoreTake(s_i2s_lock, 0) != pdTRUE) return ESP_ERR_TIMEOUT;
+    size_t written = 0;
+    const esp_err_t err = i2s_channel_write(s_tx, stereo, frames * 2 * sizeof(int16_t),
+                                            &written, 0);
+    xSemaphoreGive(s_i2s_lock);
+    return err;
+}
+
 /* ------------------------------------------------------------------ */
 /* Capture: the built-in microphones (5106)                           */
 /* ------------------------------------------------------------------ */

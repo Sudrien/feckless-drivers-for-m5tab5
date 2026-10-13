@@ -190,6 +190,19 @@ size_t    audio_out_capture_read(int32_t *frames, size_t max_frames, uint32_t ti
 void      audio_out_capture_end(void);
 bool      audio_out_capturing(void);
 
+/*
+ * Monitoring: interleaved 16-bit stereo, at AUDIO_CAPTURE_RATE, to the
+ * headphones while a HEADSET capture runs -- what the headset's
+ * microphone hears, back in its ears. The only write a capture lets
+ * through; audio_out_write() still drops.
+ *
+ * Refused (ESP_ERR_INVALID_STATE) unless capturing from the headset with
+ * the route on the headphones: never the speaker, which would feed
+ * back. Never blocks; a block with no room is dropped (ESP_ERR_TIMEOUT).
+ * The level is audio_out_set_volume()'s.
+ */
+esp_err_t audio_out_monitor_write(const int16_t *stereo, size_t frames);
+
 #ifdef __cplusplus
 }
 #endif
