@@ -93,3 +93,10 @@ make -C test
 ## Licence
 
 MIT. See `LICENSE`.
+
+Provenance: `src/hid.c` and `src/uac.c` were ported from
+m5tab5_esp_idf_usb_host_example (`usb_host_example.c`, `uac_example.c`),
+and the touch-controller selection in `src/touch.c` was lifted from
+m5tab5_esp_idf_display_example. The ES7210 register values in
+`src/audio_out.c` are hardware facts taken from Espressif's es7210 driver
+in esp_codec_dev, not its code. Each file's header says what it kept.
