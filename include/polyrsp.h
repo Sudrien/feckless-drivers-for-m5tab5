@@ -11,6 +11,8 @@
  * polyrsp_open() designs the filter (floating point, a few ms) and is
  * meant for the decode task; polyrsp_process() is the per-block half.
  * See 5039 in ARCHITECTURE.md for why this exists.
+ *
+ * SPDX-License-Identifier: MIT
  */
 #pragma once
 

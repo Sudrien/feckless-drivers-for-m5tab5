@@ -1,5 +1,7 @@
 /*
  * polyrsp -- see polyrsp.h, and 5039 in ARCHITECTURE.md.
+ *
+ * SPDX-License-Identifier: MIT
  */
 #include "polyrsp.h"
 
