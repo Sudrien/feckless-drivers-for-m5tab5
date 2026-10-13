@@ -255,7 +255,9 @@ static bool alt_offers_rate(const uac_host_dev_alt_param_t *p, uint32_t rate)
     if (p->sample_freq_type == 0) {
         return rate >= p->sample_freq_lower && rate <= p->sample_freq_upper;
     }
-    for (uint8_t i = 0; i < p->sample_freq_type; i++) {
+    /* sample_freq_type is what the device declares; the driver keeps only
+     * the first UAC_FREQ_NUM_MAX. Past that is not a rate. */
+    for (uint8_t i = 0; i < p->sample_freq_type && i < UAC_FREQ_NUM_MAX; i++) {
         if (p->sample_freq[i] == rate) return true;
     }
     return false;
@@ -384,9 +386,17 @@ static void report(uac_host_device_handle_t dev, const uac_host_dev_info_t *info
         } else {
             char rates[96];
             int off = 0;
-            for (uint8_t i = 0; i < p.sample_freq_type && off < (int)sizeof(rates) - 12; i++) {
+            uint8_t i = 0;
+            for (; i < p.sample_freq_type && i < UAC_FREQ_NUM_MAX &&
+                   off < (int)sizeof(rates) - 12; i++) {
                 off += snprintf(rates + off, sizeof(rates) - off, "%s%lu",
                                 i ? " " : "", (unsigned long)p.sample_freq[i]);
+            }
+            /* Say so when the device declared more than the driver kept,
+             * rather than printing what lies past the array. */
+            if (i < p.sample_freq_type && off < (int)sizeof(rates) - 12) {
+                off += snprintf(rates + off, sizeof(rates) - off,
+                                " (+%u not kept)", (unsigned)(p.sample_freq_type - i));
             }
             ESP_LOGI(TAG, "  alt %u: %u ch, %u-bit, %s Hz",
                      alt, p.channels, p.bit_resolution, rates);
