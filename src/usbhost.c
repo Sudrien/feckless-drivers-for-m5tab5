@@ -13,6 +13,7 @@
 #include "freertos/task.h"
 
 #include "usb/usb_host.h"
+#include "soc/usb_dwc_struct.h"    /* 0015: the FIFO depth, read once */
 
 #include "battery.h"
 #include "usbhost.h"
@@ -244,13 +245,24 @@ static esp_err_t bring_up(void)
      *
      * No preset gives both. A custom split does (esp-usb >= 1.6.0;
      * limits are lines x 4 bytes, RX less 2 status lines), out of the
-     * 1024 lines the P4's FIFO has ("Dynamically sized Data FIFO of
-     * 4096 bytes (1024 lines)", OTG_DFIFO_DEPTH = 1024, esp-usb's DWC
-     * notes for the P4). The HAL asserts if a split exceeds it, so the
-     * three below add to exactly that:
+     * FIFO the port has.
+     *
+     * 0015: NOT 1024. 0014 took the 1024 lines esp-usb's DWC notes give
+     * the P4 and the HCD's bias formulas use, and spent all of them;
+     * the HCD checks a split against GHWCFG3's dfifodepth instead, which
+     * on the board is less, and every root port reset was refused:
+     *
+     *   E HCD DWC: Invalid FIFO config
+     *   E HUB: Root port reset failed
+     *
+     * (A DWC core with DMA keeps part of its FIFO RAM for itself; that
+     * is the likely difference, not established.) So well inside it,
+     * 768 lines, and the hardware's own figure logged once at start so
+     * the split can be sized from it rather than from a document:
      *   NPTX 128 -> 512 bytes   bulk OUT: drive, USB Ethernet
      *   PTX  384 -> 1536 bytes  isochronous OUT: two 768-byte packets
-     *   RX   512 -> 2040 bytes  every IN: drive, mic, HID, Ethernet
+     *   RX   256 -> 1016 bytes  every IN: drive and Ethernet at 512, the
+     *                           HID remote, a microphone up to 1016
      * The Kconfig bias is ignored while these are set.
      */
     const usb_host_config_t host_cfg = {
@@ -259,13 +271,20 @@ static esp_err_t bring_up(void)
         .fifo_settings_custom = {
             .nptx_fifo_lines = 128,
             .ptx_fifo_lines  = 384,
-            .rx_fifo_lines   = 512,
+            .rx_fifo_lines   = 256,     /* 0015: was 512 */
         },
 #ifdef CONFIG_USB_HOST_ENABLE_ENUM_FILTER_CALLBACK
         .enum_filter_cb = enum_filter,
 #endif
     };
     ESP_RETURN_ON_ERROR(usb_host_install(&host_cfg), TAG, "usb_host_install");
+    /* 0015: what the HCD actually checks a split against. Read after
+     * install, when the controller is clocked. */
+    ESP_LOGI(TAG, "USB FIFO: %u lines in hardware; split RX %u, NPTX %u, PTX %u",
+             (unsigned)USB_DWC_HS.ghwcfg3_reg.dfifodepth,
+             (unsigned)host_cfg.fifo_settings_custom.rx_fifo_lines,
+             (unsigned)host_cfg.fifo_settings_custom.nptx_fifo_lines,
+             (unsigned)host_cfg.fifo_settings_custom.ptx_fifo_lines);
 #ifdef CONFIG_USB_HOST_DWC_DMA_CAP_MEMORY_IN_PSRAM
     /* 5100: the proof the sdkconfig took. */
     ESP_LOGI(TAG, "USB transfer buffers and descriptor lists in PSRAM");
