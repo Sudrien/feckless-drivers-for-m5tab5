@@ -230,9 +230,37 @@ static bool enum_filter(const usb_device_desc_t *dev, uint8_t *config)
  * than dropped on the floor. */
 static esp_err_t bring_up(void)
 {
+    /*
+     * 0014: the FIFO split, set here rather than by Kconfig bias.
+     *
+     * The player's sdkconfig biased it to periodic OUT so a Synaptics
+     * headset (0572:1B08) could play: its isochronous OUT is 768 bytes,
+     * IDF's balanced split gives periodic TX 512. That bias leaves
+     * non-periodic TX D/16 = 64 lines, 256 bytes, and a high-speed
+     * drive's bulk OUT is 512 -- the board, at boot with one in:
+     *
+     *   E HCD DWC: EP MPS (512) exceeds supported limit (256)
+     *   E tab5_storage: MSC device install failed (ESP_ERR_NOT_SUPPORTED)
+     *
+     * No preset gives both. A custom split does (esp-usb >= 1.6.0;
+     * limits are lines x 4 bytes, RX less 2 status lines), out of the
+     * 1024 lines the P4's FIFO has ("Dynamically sized Data FIFO of
+     * 4096 bytes (1024 lines)", OTG_DFIFO_DEPTH = 1024, esp-usb's DWC
+     * notes for the P4). The HAL asserts if a split exceeds it, so the
+     * three below add to exactly that:
+     *   NPTX 128 -> 512 bytes   bulk OUT: drive, USB Ethernet
+     *   PTX  384 -> 1536 bytes  isochronous OUT: two 768-byte packets
+     *   RX   512 -> 2040 bytes  every IN: drive, mic, HID, Ethernet
+     * The Kconfig bias is ignored while these are set.
+     */
     const usb_host_config_t host_cfg = {
         .skip_phy_setup = false,
         .intr_flags = ESP_INTR_FLAG_LEVEL1,
+        .fifo_settings_custom = {
+            .nptx_fifo_lines = 128,
+            .ptx_fifo_lines  = 384,
+            .rx_fifo_lines   = 512,
+        },
 #ifdef CONFIG_USB_HOST_ENABLE_ENUM_FILTER_CALLBACK
         .enum_filter_cb = enum_filter,
 #endif
