@@ -469,7 +469,7 @@ static void hid_transfer_cb(usb_transfer_t *transfer)
 /* Declared here because hid_free() needs it and the open table lives
  * further down with the client callback it mostly serves. */
 static bool open_released(usb_device_handle_t dev);
-static void open_claimed(usb_device_handle_t dev);
+static void open_claimed(usb_device_handle_t dev, uint8_t ep_addr);
 
 static void hid_free(hid_ctx_t *ctx)
 {
@@ -991,7 +991,7 @@ static esp_err_t hid_claim(usb_device_handle_t dev, const usb_intf_desc_t *intf,
      * so every increment has exactly one hid_free() that will decrement
      * it. Recorded before the log line for no reason other than that the
      * log line is the last thing this function does. */
-    open_claimed(dev);
+    open_claimed(dev, ep->bEndpointAddress);
 
     ESP_LOGI(TAG, "remote on itf %u: EP 0x%02X, %u byte reports, %u ms, %s%s",
              intf->bInterfaceNumber, ep->bEndpointAddress, mps, ep->bInterval,
@@ -1075,10 +1075,27 @@ static void inspect(usb_device_handle_t dev)
  * polling tasks have already finished, or the last polling task if they
  * had not.
  */
+/*
+ * 0013: AND THE COMPLETION THAT ENDS THE POLLING TASK DOES NOT ALWAYS
+ * COME. A headset (0572:1B08) dropped mid-stream -- its last control
+ * transfer refused with INVALID_STATE -- and no "remote gone" followed:
+ * the interrupt URB on its HID interface never completed, so the polling
+ * task never woke, the interface stayed claimed, the device was never
+ * closed, and the host library never raised ALL_FREE (v0.5.3's census
+ * says so). The port enumerated nothing again until a reboot. So the
+ * endpoints each claim polls are kept here too, and open_gone() halts
+ * and flushes them when it cannot close at once: the flush returns the
+ * outstanding URB with CANCELED, which is one of the two statuses the
+ * polling task already leaves on.
+ */
+#define HID_MAX_EPS_PER_DEV (4)
+
 typedef struct {
     usb_device_handle_t dev;
     int  claims;
     bool gone;
+    uint8_t eps[HID_MAX_EPS_PER_DEV];   /* 0013: one per claim, in order */
+    int  n_eps;
 } open_dev_t;
 
 static open_dev_t   s_open[HID_MAX_OPEN_DEVS];
@@ -1093,6 +1110,7 @@ static void open_remember(usb_device_handle_t dev)
             s_open[i].dev = dev;
             s_open[i].claims = 0;
             s_open[i].gone = false;
+            s_open[i].n_eps = 0;
             full = false;
             break;
         }
@@ -1130,11 +1148,16 @@ bool hid_present(void)
 
 /* A claim succeeded on this device. Called from client_task, before any
  * polling task for it exists. */
-static void open_claimed(usb_device_handle_t dev)
+static void open_claimed(usb_device_handle_t dev, uint8_t ep_addr)
 {
     portENTER_CRITICAL(&s_open_lock);
     for (int i = 0; i < HID_MAX_OPEN_DEVS; i++) {
-        if (s_open[i].dev == dev) { s_open[i].claims++; break; }
+        if (s_open[i].dev != dev) continue;
+        s_open[i].claims++;
+        if (s_open[i].n_eps < HID_MAX_EPS_PER_DEV) {
+            s_open[i].eps[s_open[i].n_eps++] = ep_addr;
+        }
+        break;
     }
     portEXIT_CRITICAL(&s_open_lock);
 }
@@ -1171,6 +1194,8 @@ static bool open_released(usb_device_handle_t dev)
 static void open_gone(usb_device_handle_t dev)
 {
     bool close_now = false;
+    uint8_t eps[HID_MAX_EPS_PER_DEV];
+    int n_eps = 0;
     portENTER_CRITICAL(&s_open_lock);
     for (int i = 0; i < HID_MAX_OPEN_DEVS; i++) {
         if (s_open[i].dev != dev) continue;
@@ -1178,6 +1203,9 @@ static void open_gone(usb_device_handle_t dev)
         if (s_open[i].claims == 0) {
             s_open[i].dev = NULL;
             close_now = true;
+        } else {
+            n_eps = s_open[i].n_eps;
+            memcpy(eps, s_open[i].eps, (size_t)n_eps);
         }
         break;
     }
@@ -1185,6 +1213,23 @@ static void open_gone(usb_device_handle_t dev)
 
     /* Outside the critical section: a host API call, and it may block. */
     if (close_now) usb_host_device_close(s_client, dev);
+
+    /*
+     * 0013: claims still held. Do not wait for their URBs to come back
+     * on their own -- halt each endpoint and flush it, which hands the
+     * outstanding transfer back as CANCELED. Its polling task then logs
+     * "remote gone", releases the interface, and as the last release on
+     * a gone device does the close (hid_free()). Not cleared: the device
+     * is gone and nothing will be submitted to it again. Failures are
+     * logged and passed over -- an endpoint already torn down by the
+     * stack has nothing outstanding to return.
+     */
+    for (int i = 0; i < n_eps; i++) {
+        esp_err_t h = usb_host_endpoint_halt(dev, eps[i]);
+        esp_err_t f = usb_host_endpoint_flush(dev, eps[i]);
+        ESP_LOGI(TAG, "device gone with EP 0x%02X claimed: halt %s, flush %s",
+                 eps[i], esp_err_to_name(h), esp_err_to_name(f));
+    }
 
     /* Not found is ordinary: DEV_GONE only reaches clients that opened
      * the device, so it means the open failed or the table was full,
