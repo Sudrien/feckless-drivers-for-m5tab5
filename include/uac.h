@@ -106,14 +106,16 @@ esp_err_t uac_write(const void *data, size_t len, uint32_t timeout_ms);
  * 0-100, matching the player's own scale.
  *
  * Non-blocking, and that is the whole point of it: the value is
- * published and the event task performs the USB control transfer. The
+ * published and the writer performs the USB control transfer, after its
+ * next uac_write() block (0018 -- it was the event task, which waited
+ * behind the writer for the whole of a track). The
  * caller is the UI task, a volume drag emits one of these per poll, and
  * a control transfer means taking the lock the audio writer holds for
  * the length of a write. Doing that on the UI task stalls the loop that
  * dispatches every other button -- see the note on uac_task().
  *
  * Coalescing rather than queueing: only the latest value matters, so a
- * drag that outruns the event task loses intermediate positions and
+ * drag that outruns the writer loses intermediate positions and
  * lands on the right one.
  */
 void uac_set_volume(uint8_t percent);

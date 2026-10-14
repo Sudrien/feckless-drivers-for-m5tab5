@@ -201,9 +201,9 @@ static uint32_t s_uac_seen;
  * samples on the way out.
  *
  * Asked per block rather than latched at route change: the answer
- * arrives asynchronously now -- uac_set_volume() publishes and the UAC
- * event task performs the transfer -- so the route can be taken before
- * the first attempt has been made. A volatile read is cheaper than being
+ * arrives asynchronously now -- uac_set_volume() publishes and the
+ * writer performs the transfer after a block (0018) -- so the route can
+ * be taken before the first attempt has been made. A volatile read is cheaper than being
  * wrong for the first second of every track. */
 static int16_t *s_scratch;
 
@@ -681,9 +681,9 @@ static void arbitrate(void)
 
     if (want == ROUTE_USB) {
         analog_set(false);
-        /* Published, not performed. The device's own control is tried on
-         * the UAC event task; until it answers, soft_gain() reports true
-         * and the samples are scaled instead. Either way the slider
+        /* Published, not performed. The device's own control is tried
+         * after the writer's next uac_write() (0018); until it answers,
+         * soft_gain() reports true and the samples are scaled instead. Either way the slider
          * works from the first block. */
         uac_set_volume(s_volume);
     } else if (s_route == ROUTE_USB) {

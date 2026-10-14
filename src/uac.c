@@ -157,6 +157,15 @@ static uint32_t s_xfer_errors;
  * the loop that also dispatches play, next, seek and the folder button.
  * That is a self-inflicted stall in the one task that must not stall.
  *
+ * 0018: and applied by the WRITER, not the event task. The event task
+ * took s_lock for the transfer and waited behind uac_write(), which
+ * takes it once per block, back to back -- so while a track played the
+ * wait never ended: three volume changes on a 0572:1B08 reached the
+ * device 42 s late, when the track did. uac_write() now applies a
+ * pending change after its own block, on the task that already owns
+ * the lock's traffic, so there is nobody to wait behind. A control
+ * transfer is about a millisecond against a block of ~23 ms of audio.
+ *
  * s_hw_volume is false until the first attempt has been made and false
  * forever once one has failed, so the software-gain fallback is decided
  * once rather than probed per change.
@@ -481,6 +490,8 @@ void uac_stream_stop(void)
     xSemaphoreGive(s_lock);
 }
 
+static void apply_volume(void);        /* below; 0018 */
+
 esp_err_t uac_write(const void *data, size_t len, uint32_t timeout_ms)
 {
     if (!s_lock || !data || len == 0) return ESP_ERR_INVALID_ARG;
@@ -492,6 +503,8 @@ esp_err_t uac_write(const void *data, size_t len, uint32_t timeout_ms)
                                     pdMS_TO_TICKS(timeout_ms));
     }
     xSemaphoreGive(s_lock);
+    /* 0018: a volume change, between blocks. See s_want_volume. */
+    if (s_volume_dirty) apply_volume();
     return ret;
 }
 
@@ -505,7 +518,7 @@ void uac_set_volume(uint8_t percent)
     s_volume_dirty = true;
 }
 
-/* The other half, on the event task. Tried once per attach; a failure
+/* The other half, on the writer since 0018 (uac_write()). Tried once per attach; a failure
  * latches the software-gain fallback rather than being retried, because
  * the answer cannot change while the same device is attached. */
 static void apply_volume(void)
@@ -1003,20 +1016,16 @@ static void uac_task(void *arg)
     uac_queue_msg_t msg;
     while (1) {
         /*
-         * A timeout rather than portMAX_DELAY, because this task now
-         * owns the volume control transfer as well as the plug events.
-         *
-         * Polling a flag at 20 Hz rather than queueing each change: only
-         * the latest value matters, a drag emits one per UI poll, and a
-         * four-deep queue would overflow within a fifth of a second of
-         * dragging. Coalescing is the correct behaviour here and falls
-         * out of the flag for free.
+         * 0018: the volume transfer moved to uac_write(), which is
+         * where it can get the lock; this task waited behind the writer
+         * for as long as a track played. The flag still coalesces --
+         * only the latest value is sent -- and a change made while
+         * nothing streams waits for the first block, which is when
+         * apply_volume() would have accepted it anyway.
          */
         if (xQueueReceive(s_queue, &msg, pdMS_TO_TICKS(50)) != pdTRUE) {
-            if (s_volume_dirty) apply_volume();
             continue;
         }
-        if (s_volume_dirty) apply_volume();
 
         switch (msg.kind) {
         case MSG_ATTACH_TX:
