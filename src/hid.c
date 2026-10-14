@@ -520,14 +520,36 @@ static void hid_poll_task(void *arg)
             ESP_LOGI(TAG, "remote gone (itf %u)", ctx->itf_num);
             break;
         }
+        /* 0016: say what came back when it is not a report, so the next
+         * log names the status that 0016's fix is the backstop for. */
+        if (transfer->status != USB_TRANSFER_STATUS_COMPLETED) {
+            ESP_LOGI(TAG, "itf %u transfer status %d; resubmitting",
+                     ctx->itf_num, (int)transfer->status);
+        }
         if (transfer->status == USB_TRANSFER_STATUS_STALL) {
             ESP_LOGW(TAG, "itf %u endpoint stalled; polling stopped", ctx->itf_num);
             break;
         }
 
         ret = usb_host_transfer_submit(transfer);
-        if (ret == ESP_ERR_NOT_FOUND || ret == ESP_ERR_INVALID_ARG) {
-            /* Definitive rejection: nothing is in flight to wait for. */
+        /*
+         * 0016: ANY refusal here, not just NOT_FOUND and INVALID_ARG. A
+         * refused resubmit has queued nothing, so no completion is
+         * coming and the wait at the top of the loop is for ever. The
+         * board: a headset dropped, the interrupt URB came back with a
+         * status that is neither NO_DEVICE nor CANCELED, the resubmit
+         * was refused --
+         *
+         *   E USB HOST: Enqueue URB error: ESP_ERR_INVALID_STATE
+         *
+         * -- and this task waited on, holding itf 3, so the device was
+         * never closed and the port enumerated nothing again. 0013's
+         * flush in open_gone() came after and had nothing to return.
+         * (Unlike the initial submit above, which can report an error
+         * and still enqueue, this one is after a completion has handed
+         * the URB back, so a refusal is a refusal.)
+         */
+        if (ret != ESP_OK) {
             ESP_LOGI(TAG, "itf %u polling stopped (%s)", ctx->itf_num,
                      esp_err_to_name(ret));
             hid_free(ctx);
