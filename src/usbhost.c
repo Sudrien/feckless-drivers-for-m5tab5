@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: MIT
  */
 
+#include <stdio.h>
 #include <string.h>
 
 #include "esp_check.h"
@@ -112,6 +113,43 @@ esp_err_t usbhost_register_class(const char *name, usbhost_class_fn fn)
     return ESP_OK;
 }
 
+/*
+ * What the host library itself holds, by its own count -- for one fault:
+ * a device that left uncleanly (a UAC headset, 479 s in, its last
+ * control transfer refused with INVALID_STATE) and after which nothing
+ * plugged in was ever enumerated again, through any number of VBUS
+ * cycles. The hub only recycles a root port once every client has freed
+ * the device that went (esp-usb hub.c, root_port_recycle()), so a
+ * client still holding it keeps the port in recovery for ever, and
+ * cycling VBUS underneath does nothing about that.
+ *
+ * With VBUS off the answer should be no devices. A device still counted
+ * then -- and its address -- says one was never freed; which classes
+ * were attached to it says whose. Logging only: nothing here changes
+ * what the stack does, because forcing the port (usb_host_lib_set_
+ * root_port_power()) past an unfreed device skips the recovery
+ * root_port_recycle() would later expect, and that ends in its abort().
+ */
+static void usb_census(const char *why)
+{
+    usb_host_lib_info_t info;
+    if (usb_host_lib_info(&info) != ESP_OK) return;
+    uint8_t addr[8];
+    int n = 0;
+    if (usb_host_device_addr_list_fill((int)sizeof(addr), addr, &n) != ESP_OK) n = 0;
+    char list[8 * 4 + 1];
+    int off = 0;
+    list[0] = '\0';
+    for (int i = 0; i < n && i < (int)sizeof(addr); i++) {
+        off += snprintf(list + off, sizeof(list) - (size_t)off, "%s%u",
+                        i ? " " : "", addr[i]);
+    }
+    ESP_LOGI(TAG, "%s: %d device%s%s%s%s, %d client%s", why,
+             info.num_devices, info.num_devices == 1 ? "" : "s",
+             n ? " (address " : "", list, n ? ")" : "",
+             info.num_clients, info.num_clients == 1 ? "" : "s");
+}
+
 static esp_err_t usb_vbus(bool on)
 {
     if (!s_exp2) return ESP_ERR_INVALID_STATE;
@@ -138,6 +176,8 @@ static esp_err_t usb_vbus(bool on)
     ESP_LOGI(TAG, "USB-A VBUS %s (expander 0x44, P3)", on ? "on" : "off");
     s_vbus_on = on;
     if (on) vTaskDelay(pdMS_TO_TICKS(USB_VBUS_SETTLE_MS));
+    /* Not on the first power-up, before the library exists to ask. */
+    if (s_up) usb_census(on ? "after VBUS on" : "after VBUS off");
     return ESP_OK;
 }
 
@@ -149,6 +189,11 @@ static void usb_lib_task(void *arg)
         usb_host_lib_handle_events(portMAX_DELAY, &flags);
         if (flags & USB_HOST_LIB_EVENT_FLAGS_NO_CLIENTS) {
             usb_host_device_free_all();
+        }
+        /* The event a clean departure ends in. Its absence after a
+         * device drops is the fault usb_census() is for. */
+        if (flags & USB_HOST_LIB_EVENT_FLAGS_ALL_FREE) {
+            ESP_LOGI(TAG, "all devices freed");
         }
     }
 }
