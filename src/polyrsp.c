@@ -25,9 +25,20 @@ static void *rsp_alloc(size_t n)
 #endif
 
 /* Taps per phase when converting up; scaled by in/out when converting
- * down so the cut stays at the same fraction of the output rate. */
+ * down so the cut stays at the same fraction of the output rate.
+ *
+ * 0017: the ceiling was 96, i.e. down by no more than 2:1, so a device
+ * that offers only 8 kHz -- the floor of UAC, and all a cheap headset
+ * may have -- was an output for nothing: 44.1 -> 8 wants 266 taps,
+ * 48 -> 8 wants 288, and polyrsp_open() said no. 1152 covers 192 -> 8.
+ * It costs nothing per second that converting down did not already:
+ * taps scale as in/out and are run out times a second, so a channel is
+ * about 48 x in_rate multiply-adds whatever the output rate. The table
+ * stays inside POLYRSP_MAX_COEFS (44.1 -> 8 is 80 x 266 = 21280). The
+ * int32 sum is still safe: |taps| sum to under 2 x 32768 for these
+ * windows, times 32768, is under 2^31. */
 #define POLYRSP_TAPS        48
-#define POLYRSP_MAX_TAPS    96
+#define POLYRSP_MAX_TAPS    1152
 /* 64 KB of table. 44.1 -> 48 kHz is 160 x 48 = 7680; 11.025 -> 48 is
  * 640 x 48 = 30720, the largest ratio a UAC device is likely to ask. */
 #define POLYRSP_MAX_COEFS   32768
