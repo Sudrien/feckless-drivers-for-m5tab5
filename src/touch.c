@@ -197,6 +197,12 @@ static bool swallow_active(bool finger_down)
  * its own problem, and the buffer loss that costs is documented in
  * sdkconfig.defaults.
  *
+ * At debug level, the down and up lines: two a tap is too many for an
+ * application's everyday log. To see them again, build with
+ * CONFIG_LOG_MAXIMUM_LEVEL_DEBUG and call
+ * esp_log_level_set("tab5_touch", ESP_LOG_DEBUG). Failed reads stay
+ * warnings.
+ *
  * Read it against the actions in player.c. A `button: seek` with no
  * `touch: down` before it is a phantom, and a `touch: read failed` next
  * to a flash is the ST7123 misbehaving on a bus it shares with the
@@ -243,7 +249,7 @@ bool touch_get(int *x, int *y)
 #if TOUCH_TRACE
         if (s_trace_down) {
             s_trace_down = false;
-            ESP_LOGI(TAG, "touch: up after %" PRIu32 " ms",
+            ESP_LOGD(TAG, "touch: up after %" PRIu32 " ms",
                      (uint32_t)pdTICKS_TO_MS(xTaskGetTickCount() - s_trace_since));
         }
 #endif
@@ -257,7 +263,7 @@ bool touch_get(int *x, int *y)
     if (!s_trace_down) {
         s_trace_down = true;
         s_trace_since = xTaskGetTickCount();
-        ESP_LOGI(TAG, "touch: down at %d,%d (%u point%s)%s",
+        ESP_LOGD(TAG, "touch: down at %d,%d (%u point%s)%s",
                  (int)pt[0].x, (int)pt[0].y, (unsigned)count,
                  count == 1 ? "" : "s",
                  s_swallow ? ", swallowed" : "");
