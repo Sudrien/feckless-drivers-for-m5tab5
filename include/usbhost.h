@@ -40,11 +40,13 @@ extern "C" {
 typedef esp_err_t (*usbhost_class_fn)(void);
 
 /*
- * Register a class driver. Safe before or after usbhost_init(), and it
- * must happen before usbhost_start(): classes registered after the port
- * is up are rejected rather than installed late, because a class driver
- * that misses the enumeration of a device already attached will not see
- * that device again until it is unplugged.
+ * Register a class driver. Safe before or after usbhost_init(), and best
+ * before usbhost_start(). After it, the class is installed late, on the
+ * bus task, and VBUS is cycled: a class driver that misses the
+ * enumeration of a device already attached would not see that device
+ * again until it was unplugged, so every device on the port is made to
+ * enumerate again. Each one drops off for a moment, the other classes'
+ * too.
  */
 esp_err_t usbhost_register_class(const char *name, usbhost_class_fn fn);
 

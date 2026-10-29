@@ -52,6 +52,10 @@ static const char *TAG = "tab5_usbhost";
  * starts driving bus resets at whatever is plugged in. */
 #define USB_VBUS_SETTLE_MS      (100)
 
+/* VBUS off before it comes back for a class registered late: long
+ * enough for the host to see each device go and the devices to drop. */
+#define USB_VBUS_CYCLE_OFF_MS   (300)
+
 /* Mass storage, audio, the HID remote and USB Ethernet: all four are
  * spoken for. This is a bound, not a budget. */
 #define MAX_CLASSES             (4)
@@ -63,6 +67,8 @@ static struct {
     usbhost_class_fn fn;
 } s_class[MAX_CLASSES];
 static size_t s_classes;
+static size_t s_installed;      /* of s_class[], the ones installed so far */
+static volatile bool s_late;    /* registered after the port was asked up */
 
 /* s_want is the request, set from anywhere; s_up is what the bus task
  * has actually done about it. Two flags rather than one because the work
@@ -100,17 +106,23 @@ bool usbhost_vbus_on(void) { return s_vbus_on; }
 esp_err_t usbhost_register_class(const char *name, usbhost_class_fn fn)
 {
     if (!name || !fn) return ESP_ERR_INVALID_ARG;
-    /* Late registration is refused rather than honoured. A class driver
-     * installed after enumeration has already happened will not be
-     * offered the devices that are already attached, so it would sit
-     * there looking installed and see nothing until someone unplugged
-     * and replugged -- which is a worse failure than being told no. */
-    if (s_up || s_want) return ESP_ERR_INVALID_STATE;
     if (s_classes >= MAX_CLASSES) return ESP_ERR_NO_MEM;
 
     s_class[s_classes].name = name;
     s_class[s_classes].fn = fn;
     s_classes++;
+
+    /* Late: once the port is up, or on its way. A class installed after
+     * enumeration is not offered the devices already attached -- it
+     * would sit there installed and see nothing until a replug. This was
+     * refused for that reason; now the bus task installs it and cycles
+     * VBUS, so whatever is plugged in enumerates again and meets it. An
+     * app a launcher started (feckless-abi-for-m5tab5) registers its
+     * classes on a port the launcher already has up. */
+    if (s_up || s_want) {
+        s_late = true;
+        if (s_task) xTaskNotifyGive(s_task);
+    }
     return ESP_OK;
 }
 
@@ -229,6 +241,24 @@ static bool enum_filter(const usb_device_desc_t *dev, uint8_t *config)
 /* Host stack, class drivers, then bus power -- in that order, so a
  * device already in the port is enumerated by a stack that exists rather
  * than dropped on the floor. */
+/* The classes registered since the last call, in registration order.
+ * Returns how many it ran. */
+static size_t install_classes(void)
+{
+    size_t n = 0;
+    for (; s_installed < s_classes; s_installed++, n++) {
+        const size_t i = s_installed;
+        const esp_err_t err = s_class[i].fn();
+        if (err == ESP_OK) {
+            ESP_LOGI(TAG, "class driver %s installed", s_class[i].name);
+        } else {
+            ESP_LOGE(TAG, "class driver %s failed (%s)", s_class[i].name,
+                     esp_err_to_name(err));
+        }
+    }
+    return n;
+}
+
 static esp_err_t bring_up(void)
 {
     /*
@@ -298,17 +328,26 @@ static esp_err_t bring_up(void)
      * headset should still play on a build where the MSC driver could
      * not allocate, and a drive should still mount on one where the
      * audio driver could not. */
-    for (size_t i = 0; i < s_classes; i++) {
-        const esp_err_t err = s_class[i].fn();
-        if (err == ESP_OK) {
-            ESP_LOGI(TAG, "class driver %s installed", s_class[i].name);
-        } else {
-            ESP_LOGE(TAG, "class driver %s failed (%s)", s_class[i].name,
-                     esp_err_to_name(err));
-        }
-    }
+    install_classes();
 
     return usb_vbus(true);
+}
+
+/* A class registered after bring_up() installed the rest: install it,
+ * then cycle VBUS so the devices already attached enumerate again. On
+ * the bus task, as bring_up() is. */
+static void late_classes(void)
+{
+    if (!s_late) return;
+    s_late = false;
+    if (!install_classes() || !s_vbus_on) return;
+    ESP_LOGI(TAG, "class registered late: cycling VBUS");
+    esp_err_t err = usb_vbus(false);
+    if (err == ESP_OK) {
+        vTaskDelay(pdMS_TO_TICKS(USB_VBUS_CYCLE_OFF_MS));
+        err = usb_vbus(s_vbus_want);
+    }
+    if (err != ESP_OK) ESP_LOGW(TAG, "VBUS cycle failed (%s)", esp_err_to_name(err));
 }
 
 /*
@@ -326,6 +365,8 @@ static void usbhost_task(void *arg)
     (void)arg;
     while (1) {
         ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+
+        if (s_up) late_classes();
 
         /*
          * Power, when the stack is already up. Checked first, because
@@ -354,6 +395,7 @@ static void usbhost_task(void *arg)
         const esp_err_t err = bring_up();
         if (err == ESP_OK) {
             s_up = true;
+            late_classes();     /* one registered while this ran */
         } else {
             /* Cleared only on failure. Clearing it on the way in would
              * leave a window where neither flag is set and anything
