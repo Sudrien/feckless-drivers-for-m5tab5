@@ -25,7 +25,10 @@ extern "C" {
  * io_expanders_init() there is nothing on the bus to probe.
  *
  * ESP_ERR_NOT_FOUND is not fatal -- the player runs without touch, it
- * just cannot be controlled. */
+ * just cannot be controlled.
+ *
+ * Called again once a controller is found, it keeps that controller and
+ * resets the rotation (upright) and touch_swallow(). */
 esp_err_t touch_init(i2c_master_bus_handle_t bus, int panel_w, int panel_h);
 
 /* One point, or false when nothing is down. Coordinates are panel-native

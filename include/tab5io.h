@@ -41,8 +41,9 @@ extern "C" {
 #define PI4IOE_REG_PULL_EN      (0x0B)
 #define PI4IOE_REG_PULL_SEL     (0x0D)
 
-/* Once, first thing in app_main(). The first write is retried, because a
- * panic can leave a slave holding SDA into the next boot. */
+/* First thing in app_main(). The first write is retried, because a
+ * panic can leave a slave holding SDA into the next boot. Called again
+ * once it has worked, it returns ESP_OK and touches nothing. */
 esp_err_t tab5io_init(void);
 
 /* The bus, for adding devices to. NULL before tab5io_init(). */

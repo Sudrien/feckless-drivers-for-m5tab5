@@ -68,7 +68,8 @@ typedef uint8_t (*usbhost_config_fn)(uint16_t vid, uint16_t pid,
 void usbhost_set_config_select(usbhost_config_fn fn);
 
 /*
- * Record the expander and start the bus task. Powers nothing.
+ * Record the expander and start the bus task. Powers nothing. Called
+ * again, it returns ESP_OK and starts nothing more.
  *
  * exp2 is the PI4IOE5V6416 at 0x44. USB5V_EN is P3 of that expander, not
  * a GPIO: until it is driven high the port is electrically dead -- the

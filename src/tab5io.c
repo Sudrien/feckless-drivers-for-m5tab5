@@ -157,7 +157,12 @@ static esp_err_t io_expanders_init(void)
 
 esp_err_t tab5io_init(void)
 {
-    ESP_RETURN_ON_ERROR(i2c_bus_init(), TAG, "i2c bus");
+    /* Again is not an error: an app a launcher started on the board it
+     * had already brought up (feckless-abi-for-m5tab5) calls this as it
+     * would at boot. The bus and the expanders stay as they are -- a
+     * second chip reset would pulse LCD_RST under a running panel. */
+    if (s_exp1 && s_exp2) return ESP_OK;
+    if (!s_i2c_bus) ESP_RETURN_ON_ERROR(i2c_bus_init(), TAG, "i2c bus");
     return io_expanders_init();
 }
 

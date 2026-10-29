@@ -368,6 +368,8 @@ static void usbhost_task(void *arg)
 esp_err_t usbhost_init(i2c_master_dev_handle_t exp2)
 {
     s_exp2 = exp2;
+    /* Again is not an error: one bus task, already there. */
+    if (s_task) return ESP_OK;
     if (xTaskCreate(usbhost_task, "usbhost", 4096, NULL, 3, &s_task) != pdPASS) {
         return ESP_ERR_NO_MEM;
     }

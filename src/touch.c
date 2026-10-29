@@ -96,6 +96,15 @@ esp_err_t touch_init(i2c_master_bus_handle_t bus, int panel_w, int panel_h)
     s_w = panel_w;
     s_h = panel_h;
 
+    /* Again, once a controller is found: as a fresh init leaves it --
+     * upright, nothing swallowed -- on the controller already there.
+     * An app a launcher started calls this as it would at boot. */
+    if (s_touch) {
+        s_rot = 0;
+        s_swallow = false;
+        return ESP_OK;
+    }
+
     /* Coordinates come out in panel-native portrait space, which is
      * exactly the framebuffer layout, so nothing is swapped or mirrored. */
     esp_lcd_touch_config_t tp_cfg = {
